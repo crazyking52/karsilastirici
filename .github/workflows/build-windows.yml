@@ -1,0 +1,31 @@
+name: Windows EXE Oluştur
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Bağımlılıkları kur
+        run: |
+          pip install pandas openpyxl xlrd customtkinter pyinstaller
+
+      - name: EXE oluştur
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --name "Karsilastirici" --add-data "engine.py;." app.py
+
+      - name: EXE dosyasını yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Karsilastirici-Windows
+          path: dist/Karsilastirici.exe
