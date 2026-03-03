@@ -24,16 +24,29 @@ class ComparisonEngine:
         df = self.load_file(file_path, sheet_name)
         return list(df.columns.astype(str))
 
-    def compare(self, ref_path, ref_sheet, ref_column, comp_files, comp_column):
+    def compare(self, ref_files, ref_column, comp_files, comp_column):
         """
-        ref_path: referans dosya yolu
-        ref_sheet: referans sayfa adı (None ise ilk sayfa)
+        ref_files: [(dosya_yolu, sayfa_adı), ...] listesi
         ref_column: referans sütun adı
         comp_files: [(dosya_yolu, sayfa_adı), ...] listesi
         comp_column: karşılaştırma sütun adı
         """
-        ref_df = self.load_file(ref_path, ref_sheet)
-        ref_values = set(ref_df[ref_column].dropna().astype(str).str.strip())
+        ref_values = set()
+        ref_source_map = {}
+
+        for file_path, sheet_name in ref_files:
+            ref_df = self.load_file(file_path, sheet_name)
+            if ref_column not in ref_df.columns:
+                raise ValueError(
+                    f"'{ref_column}' sütunu '{Path(file_path).name}' dosyasında bulunamadı.\n"
+                    f"Mevcut sütunlar: {', '.join(ref_df.columns.astype(str))}"
+                )
+            values = set(ref_df[ref_column].dropna().astype(str).str.strip())
+            ref_values.update(values)
+            for v in values:
+                if v not in ref_source_map:
+                    ref_source_map[v] = []
+                ref_source_map[v].append(Path(file_path).name)
 
         all_comp_values = set()
         source_map = {}
@@ -63,6 +76,7 @@ class ComparisonEngine:
             "matches": sorted(matches),
             "only_in_reference": sorted(only_in_ref),
             "only_in_comparison": sorted(only_in_comp),
+            "ref_source_map": ref_source_map,
             "source_map": source_map,
             "stats": {
                 "ref_total": total,
@@ -83,7 +97,8 @@ class ComparisonEngine:
 
             no_match_rows = []
             for v in results["only_in_reference"]:
-                no_match_rows.append({"Kayıt": v, "Durum": "Referansta var, karşılaştırmada yok"})
+                ref_src = ", ".join(results["ref_source_map"].get(v, ["?"]))
+                no_match_rows.append({"Kayıt": v, "Durum": f"Referansta var ({ref_src}), karşılaştırmada yok"})
             for v in results["only_in_comparison"]:
                 sources = ", ".join(results["source_map"].get(v, ["?"]))
                 no_match_rows.append({"Kayıt": v, "Durum": f"Karşılaştırmada var ({sources}), referansta yok"})

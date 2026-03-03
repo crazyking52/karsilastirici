@@ -24,7 +24,7 @@ if %errorlevel% neq 0 (
 )
 
 echo [2/3] Kutuphaneler yukleniyor...
-.venv\Scripts\pip install pandas openpyxl xlrd customtkinter pyinstaller
+.venv\Scripts\pip install pandas openpyxl xlrd customtkinter tkinterdnd2 pyinstaller
 if %errorlevel% neq 0 (
     echo [HATA] Kutuphaneler yuklenemedi!
     pause
@@ -32,7 +32,7 @@ if %errorlevel% neq 0 (
 )
 
 echo [3/3] EXE dosyasi olusturuluyor...
-.venv\Scripts\pyinstaller --noconfirm --onefile --windowed --name "Karsilastirici" --add-data "engine.py;." app.py
+.venv\Scripts\pyinstaller --noconfirm --onefile --windowed --name "Karsilastirici" --add-data "engine.py;." --collect-all tkinterdnd2 app.py
 if %errorlevel% neq 0 (
     echo [HATA] EXE olusturulamadi!
     pause

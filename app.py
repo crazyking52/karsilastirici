@@ -9,8 +9,31 @@ if getattr(sys, "frozen", False):
 
 from engine import ComparisonEngine
 
+DND_AVAILABLE = False
+
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    _DND_IMPORT_OK = True
+except Exception:
+    _DND_IMPORT_OK = False
+
+if _DND_IMPORT_OK:
+    class _BaseCTk(ctk.CTk, TkinterDnD.DnDWrapper):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            global DND_AVAILABLE
+            try:
+                self.TkdndVersion = TkinterDnD._require(self)
+                DND_AVAILABLE = True
+            except Exception:
+                DND_AVAILABLE = False
+else:
+    _BaseCTk = ctk.CTk
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+SUPPORTED_EXTENSIONS = {".xlsx", ".xls", ".csv"}
 
 
 class FileEntry(ctk.CTkFrame):
@@ -36,7 +59,7 @@ class FileEntry(ctk.CTkFrame):
         ).grid(row=0, column=1, padx=5, pady=2)
 
 
-class App(ctk.CTk):
+class App(_BaseCTk):
     def __init__(self):
         super().__init__()
 
@@ -45,11 +68,43 @@ class App(ctk.CTk):
         self.minsize(900, 650)
 
         self.engine = ComparisonEngine()
-        self.ref_path = None
+        self.ref_files = []
         self.comp_files = []
         self.results = None
 
         self._build_ui()
+
+    # ── Drag & Drop Yardımcıları ─────────────────────────────────
+
+    def _parse_drop_data(self, data):
+        """Platform bağımsız sürüklenen dosya yollarını ayrıştır."""
+        files = []
+        i = 0
+        while i < len(data):
+            if data[i] == "{":
+                end = data.index("}", i)
+                files.append(data[i + 1 : end])
+                i = end + 2
+            elif data[i] == " ":
+                i += 1
+            else:
+                end = data.find(" ", i)
+                if end == -1:
+                    files.append(data[i:])
+                    break
+                files.append(data[i:end])
+                i = end + 1
+        return [f for f in files if Path(f).suffix.lower() in SUPPORTED_EXTENSIONS]
+
+    def _enable_drop(self, widget, callback):
+        """Bir widget'a drop zone özelliği ekle (DnD varsa)."""
+        if not DND_AVAILABLE:
+            return
+        try:
+            widget.drop_target_register(DND_FILES)
+            widget.dnd_bind("<<Drop>>", callback)
+        except Exception:
+            pass
 
     # ── Arayüz Oluşturma ──────────────────────────────────────────
 
@@ -98,46 +153,54 @@ class App(ctk.CTk):
         panel = ctk.CTkFrame(parent)
         panel.grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
 
-        ctk.CTkLabel(panel, text="Referans Dosya", font=("", 16, "bold")).pack(
+        ctk.CTkLabel(panel, text="Referans Dosyaları", font=("", 16, "bold")).pack(
             pady=(10, 5)
         )
         ctk.CTkLabel(
-            panel, text="Ana dosyanızı seçin", text_color="gray", font=("", 11)
+            panel, text="Ana dosyalarınızı ekleyin", text_color="gray", font=("", 11)
         ).pack()
 
-        self.ref_label = ctk.CTkLabel(
-            panel, text="Henüz dosya seçilmedi", text_color="#888"
+        self.ref_list_frame = ctk.CTkScrollableFrame(panel, height=60)
+        self.ref_list_frame.pack(fill="x", padx=15, pady=5)
+        self.ref_list_frame.grid_columnconfigure(0, weight=1)
+
+        drop_hint = "Dosya eklenmedi\n(veya buraya sürükle-bırak)" if DND_AVAILABLE else "Dosya eklenmedi"
+        self.ref_empty_label = ctk.CTkLabel(
+            self.ref_list_frame, text=drop_hint, text_color="#888"
         )
-        self.ref_label.pack(pady=5)
+        self.ref_empty_label.grid(row=0, column=0)
 
-        ctk.CTkButton(panel, text="Dosya Seç", command=self._select_ref_file).pack(
-            pady=5
+        self._enable_drop(panel, self._on_ref_drop)
+
+        btn_row = ctk.CTkFrame(panel, fg_color="transparent")
+        btn_row.pack(pady=5)
+        ctk.CTkButton(
+            btn_row, text="Dosya Ekle", command=self._add_ref_files, width=120
+        ).pack(side="left", padx=3)
+        ctk.CTkButton(
+            btn_row,
+            text="Tümünü Temizle",
+            command=self._clear_ref_files,
+            width=120,
+            fg_color="#c0392b",
+            hover_color="#e74c3c",
+        ).pack(side="left", padx=3)
+
+        ref_opts = ctk.CTkFrame(panel, fg_color="transparent")
+        ref_opts.pack(fill="x", padx=15, pady=(5, 10))
+        ref_opts.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(ref_opts, text="Sütun:").grid(
+            row=0, column=0, padx=(0, 5), sticky="w"
         )
-
-        opts = ctk.CTkFrame(panel, fg_color="transparent")
-        opts.pack(fill="x", padx=15, pady=(5, 10))
-        opts.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(opts, text="Sayfa:").grid(row=0, column=0, padx=(0, 5), sticky="w")
-        self.ref_sheet_var = ctk.StringVar(value="--")
-        self.ref_sheet_menu = ctk.CTkOptionMenu(
-            opts,
-            variable=self.ref_sheet_var,
-            values=["--"],
-            command=self._on_ref_sheet_change,
-            dynamic_resizing=False,
-        )
-        self.ref_sheet_menu.grid(row=0, column=1, sticky="ew", pady=2)
-
-        ctk.CTkLabel(opts, text="Sütun:").grid(row=1, column=0, padx=(0, 5), sticky="w")
         self.ref_col_var = ctk.StringVar(value="--")
         self.ref_col_menu = ctk.CTkOptionMenu(
-            opts,
+            ref_opts,
             variable=self.ref_col_var,
             values=["--"],
             dynamic_resizing=False,
         )
-        self.ref_col_menu.grid(row=1, column=1, sticky="ew", pady=2)
+        self.ref_col_menu.grid(row=0, column=1, sticky="ew", pady=2)
 
     def _build_comp_panel(self, parent):
         panel = ctk.CTkFrame(parent)
@@ -157,10 +220,13 @@ class App(ctk.CTk):
         self.comp_list_frame.pack(fill="x", padx=15, pady=5)
         self.comp_list_frame.grid_columnconfigure(0, weight=1)
 
+        drop_hint = "Dosya eklenmedi\n(veya buraya sürükle-bırak)" if DND_AVAILABLE else "Dosya eklenmedi"
         self.comp_empty_label = ctk.CTkLabel(
-            self.comp_list_frame, text="Dosya eklenmedi", text_color="#888"
+            self.comp_list_frame, text=drop_hint, text_color="#888"
         )
         self.comp_empty_label.grid(row=0, column=0)
+
+        self._enable_drop(panel, self._on_comp_drop)
 
         btn_row = ctk.CTkFrame(panel, fg_color="transparent")
         btn_row.pack(pady=5)
@@ -233,41 +299,81 @@ class App(ctk.CTk):
             ("Tüm Dosyalar", "*.*"),
         ]
 
-    def _select_ref_file(self):
-        path = filedialog.askopenfilename(
-            title="Referans Dosya Seçin", filetypes=self._file_types()
+    def _on_ref_drop(self, event):
+        paths = self._parse_drop_data(event.data)
+        if paths:
+            self._add_files_to_ref(paths)
+
+    def _on_comp_drop(self, event):
+        paths = self._parse_drop_data(event.data)
+        if paths:
+            self._add_files_to_comp(paths)
+
+    def _add_ref_files(self):
+        paths = filedialog.askopenfilenames(
+            title="Referans Dosyalarını Seçin", filetypes=self._file_types()
         )
-        if not path:
+        if not paths:
+            return
+        self._add_files_to_ref(paths)
+
+    def _add_files_to_ref(self, paths):
+
+        existing_paths = {p for p, _ in self.ref_files}
+        first_new = len(self.ref_files) == 0
+
+        for p in paths:
+            if p not in existing_paths:
+                try:
+                    sheets = self.engine.get_sheet_names(p)
+                    sheet = sheets[0] if sheets else None
+                    self.ref_files.append((p, sheet))
+                except Exception as e:
+                    messagebox.showerror(
+                        "Dosya Okuma Hatası",
+                        f"'{Path(p).name}' dosyası okunamadı:\n{e}",
+                    )
+
+        self._refresh_ref_list()
+
+        if first_new and self.ref_files:
+            path, sheet = self.ref_files[0]
+            try:
+                cols = self.engine.get_columns(path, sheet)
+                self.ref_col_menu.configure(values=cols if cols else ["--"])
+                self.ref_col_var.set(cols[0] if cols else "--")
+            except Exception as e:
+                messagebox.showerror("Hata", str(e))
+
+    def _remove_ref_file(self, entry_widget):
+        self.ref_files = [
+            (p, s) for p, s in self.ref_files if p != entry_widget.file_path
+        ]
+        self._refresh_ref_list()
+        if not self.ref_files:
+            self.ref_col_menu.configure(values=["--"])
+            self.ref_col_var.set("--")
+
+    def _clear_ref_files(self):
+        self.ref_files = []
+        self._refresh_ref_list()
+        self.ref_col_menu.configure(values=["--"])
+        self.ref_col_var.set("--")
+
+    def _refresh_ref_list(self):
+        for widget in self.ref_list_frame.winfo_children():
+            widget.destroy()
+
+        if not self.ref_files:
+            self.ref_empty_label = ctk.CTkLabel(
+                self.ref_list_frame, text="Dosya eklenmedi", text_color="#888"
+            )
+            self.ref_empty_label.grid(row=0, column=0)
             return
 
-        self.ref_path = path
-        self.ref_label.configure(text=Path(path).name, text_color="white")
-
-        try:
-            sheets = self.engine.get_sheet_names(path)
-            if sheets:
-                self.ref_sheet_menu.configure(values=sheets)
-                self.ref_sheet_var.set(sheets[0])
-                self._on_ref_sheet_change(sheets[0])
-            else:
-                self.ref_sheet_menu.configure(values=["--"])
-                self.ref_sheet_var.set("--")
-                self._load_ref_columns(path, None)
-        except Exception as e:
-            messagebox.showerror("Dosya Okuma Hatası", f"Dosya okunamadı:\n{e}")
-
-    def _on_ref_sheet_change(self, sheet_name):
-        if not self.ref_path or sheet_name == "--":
-            return
-        self._load_ref_columns(self.ref_path, sheet_name)
-
-    def _load_ref_columns(self, path, sheet):
-        try:
-            cols = self.engine.get_columns(path, sheet)
-            self.ref_col_menu.configure(values=cols if cols else ["--"])
-            self.ref_col_var.set(cols[0] if cols else "--")
-        except Exception as e:
-            messagebox.showerror("Hata", str(e))
+        for i, (path, _) in enumerate(self.ref_files):
+            entry = FileEntry(self.ref_list_frame, path, self._remove_ref_file)
+            entry.grid(row=i, column=0, sticky="ew", pady=1)
 
     def _add_comp_files(self):
         paths = filedialog.askopenfilenames(
@@ -275,7 +381,9 @@ class App(ctk.CTk):
         )
         if not paths:
             return
+        self._add_files_to_comp(paths)
 
+    def _add_files_to_comp(self, paths):
         existing_paths = {p for p, _ in self.comp_files}
         first_new = len(self.comp_files) == 0
 
@@ -335,8 +443,8 @@ class App(ctk.CTk):
     # ── Karşılaştırma ─────────────────────────────────────────────
 
     def _run_comparison(self):
-        if not self.ref_path:
-            messagebox.showwarning("Uyarı", "Lütfen bir referans dosya seçin.")
+        if not self.ref_files:
+            messagebox.showwarning("Uyarı", "Lütfen en az bir referans dosya ekleyin.")
             return
         if not self.comp_files:
             messagebox.showwarning(
@@ -350,16 +458,12 @@ class App(ctk.CTk):
             messagebox.showwarning("Uyarı", "Lütfen karşılaştırılacak sütunları seçin.")
             return
 
-        ref_sheet = self.ref_sheet_var.get()
-        if ref_sheet == "--":
-            ref_sheet = None
-
         self.status_label.configure(text="Karşılaştırılıyor...", text_color="yellow")
         self.update()
 
         try:
             self.results = self.engine.compare(
-                self.ref_path, ref_sheet, ref_col, self.comp_files, comp_col
+                self.ref_files, ref_col, self.comp_files, comp_col
             )
             self._display_results()
             self.export_btn.configure(state="normal")
