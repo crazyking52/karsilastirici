@@ -24,46 +24,95 @@ class ComparisonEngine:
         df = self.load_file(file_path, sheet_name)
         return list(df.columns.astype(str))
 
-    def compare(self, ref_files, ref_column, comp_files, comp_column):
+    def _count_total_rows(self, files):
+        """Toplam satır sayısını dosyaları okumadan önce hesapla."""
+        total = 0
+        for file_path, sheet_name in files:
+            df = self.load_file(file_path, sheet_name)
+            total += len(df)
+        return total
+
+    def compare(self, ref_files, ref_columns, comp_files, comp_columns,
+                on_progress=None):
         """
         ref_files: [(dosya_yolu, sayfa_adı), ...] listesi
-        ref_column: referans sütun adı
+        ref_columns: [sütun_adı, ...] listesi
         comp_files: [(dosya_yolu, sayfa_adı), ...] listesi
-        comp_column: karşılaştırma sütun adı
+        comp_columns: [sütun_adı, ...] listesi
+        on_progress: callback(checked, total, phase) -- ilerleme bildirimi
         """
+        total_rows = self._count_total_rows(ref_files) + self._count_total_rows(comp_files)
+        checked = 0
+
         ref_values = set()
         ref_source_map = {}
+        ref_duplicates = {}
 
         for file_path, sheet_name in ref_files:
             ref_df = self.load_file(file_path, sheet_name)
-            if ref_column not in ref_df.columns:
-                raise ValueError(
-                    f"'{ref_column}' sütunu '{Path(file_path).name}' dosyasında bulunamadı.\n"
-                    f"Mevcut sütunlar: {', '.join(ref_df.columns.astype(str))}"
-                )
-            values = set(ref_df[ref_column].dropna().astype(str).str.strip())
-            ref_values.update(values)
-            for v in values:
-                if v not in ref_source_map:
-                    ref_source_map[v] = []
-                ref_source_map[v].append(Path(file_path).name)
+            fname = Path(file_path).name
+            for col in ref_columns:
+                if col not in ref_df.columns:
+                    raise ValueError(
+                        f"'{col}' sütunu '{fname}' dosyasında bulunamadı.\n"
+                        f"Mevcut sütunlar: {', '.join(ref_df.columns.astype(str))}"
+                    )
+            row_count = len(ref_df)
+            for col in ref_columns:
+                col_values = ref_df[col].dropna().astype(str).str.strip()
+                counts = col_values.value_counts()
+                for val, cnt in counts.items():
+                    if cnt > 1:
+                        key = f"{val}"
+                        if key not in ref_duplicates:
+                            ref_duplicates[key] = []
+                        ref_duplicates[key].append(f"{fname} → {col}: {cnt} kez")
+                values = set(col_values)
+                ref_values.update(values)
+                for v in values:
+                    if v not in ref_source_map:
+                        ref_source_map[v] = []
+                    source = f"{fname} → {col}"
+                    if source not in ref_source_map[v]:
+                        ref_source_map[v].append(source)
+            checked += row_count
+            if on_progress:
+                on_progress(checked, total_rows, "Referans okunuyor...")
 
         all_comp_values = set()
         source_map = {}
+        comp_duplicates = {}
 
         for file_path, sheet_name in comp_files:
             comp_df = self.load_file(file_path, sheet_name)
-            if comp_column not in comp_df.columns:
-                raise ValueError(
-                    f"'{comp_column}' sütunu '{Path(file_path).name}' dosyasında bulunamadı.\n"
-                    f"Mevcut sütunlar: {', '.join(comp_df.columns.astype(str))}"
-                )
-            values = set(comp_df[comp_column].dropna().astype(str).str.strip())
-            all_comp_values.update(values)
-            for v in values:
-                if v not in source_map:
-                    source_map[v] = []
-                source_map[v].append(Path(file_path).name)
+            fname = Path(file_path).name
+            for col in comp_columns:
+                if col not in comp_df.columns:
+                    raise ValueError(
+                        f"'{col}' sütunu '{fname}' dosyasında bulunamadı.\n"
+                        f"Mevcut sütunlar: {', '.join(comp_df.columns.astype(str))}"
+                    )
+            row_count = len(comp_df)
+            for col in comp_columns:
+                col_values = comp_df[col].dropna().astype(str).str.strip()
+                counts = col_values.value_counts()
+                for val, cnt in counts.items():
+                    if cnt > 1:
+                        key = f"{val}"
+                        if key not in comp_duplicates:
+                            comp_duplicates[key] = []
+                        comp_duplicates[key].append(f"{fname} → {col}: {cnt} kez")
+                values = set(col_values)
+                all_comp_values.update(values)
+                for v in values:
+                    if v not in source_map:
+                        source_map[v] = []
+                    source = f"{fname} → {col}"
+                    if source not in source_map[v]:
+                        source_map[v].append(source)
+            checked += row_count
+            if on_progress:
+                on_progress(checked, total_rows, "Karşılaştırılıyor...")
 
         matches = ref_values & all_comp_values
         only_in_ref = ref_values - all_comp_values
@@ -78,6 +127,8 @@ class ComparisonEngine:
             "only_in_comparison": sorted(only_in_comp),
             "ref_source_map": ref_source_map,
             "source_map": source_map,
+            "ref_duplicates": ref_duplicates,
+            "comp_duplicates": comp_duplicates,
             "stats": {
                 "ref_total": total,
                 "comp_total": len(all_comp_values),
@@ -85,6 +136,8 @@ class ComparisonEngine:
                 "only_ref_count": len(only_in_ref),
                 "only_comp_count": len(only_in_comp),
                 "match_percentage": match_pct,
+                "ref_dup_count": len(ref_duplicates),
+                "comp_dup_count": len(comp_duplicates),
             },
         }
 
@@ -122,6 +175,18 @@ class ComparisonEngine:
                 }
                 pd.DataFrame(data).to_excel(
                     writer, sheet_name="Yalnızca Karşılaştırma", index=False
+                )
+
+            dup_rows = []
+            for val, details in results["ref_duplicates"].items():
+                for d in details:
+                    dup_rows.append({"Kayıt": val, "Konum": d, "Taraf": "Referans"})
+            for val, details in results["comp_duplicates"].items():
+                for d in details:
+                    dup_rows.append({"Kayıt": val, "Konum": d, "Taraf": "Karşılaştırma"})
+            if dup_rows:
+                pd.DataFrame(dup_rows).to_excel(
+                    writer, sheet_name="Tekrar Edenler", index=False
                 )
 
             stats = results["stats"]
