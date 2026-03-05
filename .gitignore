@@ -7,3 +7,6 @@ dist/
 ornek_dosyalar/
 test_verileri_olustur.py
 windows_exe/
+settings.json
+history.json
+profiles.json
